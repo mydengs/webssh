@@ -1,0 +1,200 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>WebSSH</title>
+<link rel="stylesheet" href="/static/xterm.min.css">
+<script src="/static/xterm.min.js"></script>
+<script src="/static/addon-fit.min.js"></script>
+<style>
+  * { box-sizing: border-box; margin:0; padding:0; }
+  html,body { height:100%; background:#0d1117; font-family:-apple-system,"PingFang SC",sans-serif; }
+  body { display:flex; flex-direction:column; }
+  header {
+    display:flex; align-items:center; justify-content:space-between;
+    padding:10px 16px; background:#161b22; color:#e6edf3; border-bottom:1px solid #30363d;
+    flex:0 0 auto;
+  }
+  header b { font-size:15px; }
+  #status { font-size:12px; color:#8b949e; }
+  #rightbox { display:flex; align-items:center; gap:12px; }
+  #term { flex:1 1 auto; padding:8px; min-height:0; overflow:hidden; }
+  #login {
+    position:fixed; inset:0; background:#0d1117; display:flex;
+    align-items:center; justify-content:center; z-index:10;
+  }
+  .card { background:#161b22; border:1px solid #30363d; border-radius:12px; padding:36px; width:320px; }
+  .card h2 { color:#e6edf3; margin-bottom:6px; font-size:18px; }
+  .card p { color:#8b949e; font-size:12px; margin-bottom:20px; }
+  .card input {
+    width:100%; padding:10px; background:#0d1117; color:#e6edf3;
+    border:1px solid #30363d; border-radius:8px; margin-bottom:14px; font-size:14px;
+  }
+  .card button {
+    width:100%; padding:10px; background:#238636; color:#fff; border:0;
+    border-radius:8px; font-size:14px; cursor:pointer;
+  }
+  .card button:disabled { background:#2d5a3a; cursor:not-allowed; }
+  #msg { color:#f85149; font-size:12px; margin-bottom:10px; min-height:16px; }
+  #logout { background:#30363d; color:#e6edf3; border:0; border-radius:6px; padding:4px 10px; cursor:pointer; font-size:12px; }
+  .hidden { display:none !important; }
+</style>
+</head>
+<body>
+<div id="login">
+  <div class="card">
+    <h2>WebSSH 终端</h2>
+    <p>输入访问口令登录本机终端</p>
+    <div id="msg"></div>
+    <input type="password" id="pwd" placeholder="访问口令" autocomplete="current-password">
+    <button id="btn" type="button">登 录</button>
+  </div>
+</div>
+<header>
+  <b>&#9000; WebSSH &mdash; 本机终端</b>
+  <div id="rightbox"><span id="status">未连接</span><button id="logout" class="hidden" type="button">退出</button></div>
+</header>
+<div id="term"></div>
+
+<script>
+(function () {
+  "use strict";
+  var $ = function (id) { return document.getElementById(id); };
+  var term = null, fit = null, ws = null, resizeTimer = null;
+
+  function setStatus(s) { $("status").textContent = s; }
+  function setMsg(s)    { $("msg").textContent = s || ""; }
+
+  /* ---------- 终端初始化（失败也不影响登录） ---------- */
+  function initTerm() {
+    if (term) return true;
+    if (typeof Terminal === "undefined") {
+      setMsg("终端组件未加载（xterm.js 缺失），请检查 /static/xterm.min.js");
+      return false;
+    }
+    try {
+      term = new Terminal({
+        cursorBlink: true,
+        fontFamily: "Menlo,Consolas,DejaVu Sans Mono,monospace",
+        fontSize: 14,
+        scrollback: 5000,
+        theme: { background: "#0d1117", foreground: "#e6edf3" }
+      });
+      if (window.FitAddon && window.FitAddon.FitAddon) {
+        fit = new window.FitAddon.FitAddon();
+        term.loadAddon(fit);
+      }
+      term.open($("term"));
+      term.onData(function (d) {
+        if (ws && ws.readyState === 1) ws.send(d);
+      });
+      return true;
+    } catch (e) {
+      setMsg("终端初始化失败：" + e.message);
+      term = null;
+      return false;
+    }
+  }
+
+  function doFit() {
+    if (!fit) return;
+    try { fit.fit(); } catch (e) {}
+  }
+
+  window.addEventListener("resize", function () {
+    clearTimeout(resizeTimer);
+    resizeTimer = setTimeout(doFit, 120);
+  });
+
+  /* ---------- WebSocket ---------- */
+  function connect() {
+    if (!initTerm()) return;
+    doFit();
+    var proto = location.protocol === "https:" ? "wss" : "ws";
+    ws = new WebSocket(proto + "://" + location.host + "/ws");
+
+    ws.onopen = function () {
+      setStatus("已连接");
+      doFit();
+      if (term) term.focus();
+    };
+    ws.onmessage = function (e) { if (term) term.write(e.data); };
+    ws.onerror = function () { setStatus("连接出错"); };
+    ws.onclose = function () {
+      setStatus("已断开");
+      if (term) term.write("\r\n\x1b[31m[连接已断开，请刷新页面重连]\x1b[0m\r\n");
+    };
+
+    setInterval(function () {
+      if (ws && ws.readyState === 1 && term) {
+        try { ws.send("\u0000RESIZE:" + term.cols + ":" + term.rows); } catch (e) {}
+      }
+    }, 700);
+  }
+
+  function showTerm() {
+    $("login").classList.add("hidden");
+    $("logout").classList.remove("hidden");
+    connect();
+  }
+
+  /* ---------- 登录 ---------- */
+  var busy = false;
+  function doLogin() {
+    if (busy) return;
+    var pwd = $("pwd").value;
+    if (!pwd) { setMsg("请输入口令"); return; }
+    busy = true;
+    setMsg("登录中…");
+    $("btn").disabled = true;
+
+    fetch("/api/login", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      credentials: "same-origin",
+      body: JSON.stringify({ password: pwd })
+    }).then(function (r) {
+      return r.json().then(function (j) { return { code: r.status, body: j }; });
+    }).then(function (res) {
+      if (res.body && res.body.ok) {
+        setMsg("");
+        showTerm();
+      } else {
+        setMsg((res.body && res.body.msg) || ("登录失败 (HTTP " + res.code + ")"));
+      }
+    }).catch(function (e) {
+      setMsg("请求失败：" + e.message);
+    }).then(function () {
+      busy = false;
+      $("btn").disabled = false;
+    });
+  }
+
+  $("btn").addEventListener("click", doLogin);
+  $("pwd").addEventListener("keydown", function (e) {
+    if (e.key === "Enter" || e.keyCode === 13) { e.preventDefault(); doLogin(); }
+  });
+
+  $("logout").addEventListener("click", function () {
+    fetch("/api/logout", { method: "POST", credentials: "same-origin" }).catch(function () {});
+    if (ws) { try { ws.close(); } catch (e) {} ws = null; }
+    if (term) { try { term.dispose(); } catch (e) {} term = null; fit = null; }
+    $("login").classList.remove("hidden");
+    $("logout").classList.add("hidden");
+    $("pwd").value = "";
+    setStatus("未连接");
+  });
+
+  /* ---------- 已登录则直接进终端 ---------- */
+  fetch("/api/me", { credentials: "same-origin" })
+    .then(function (r) { return r.json(); })
+    .then(function (j) {
+      if (j && j.authed) { showTerm(); }
+      else { $("pwd").focus(); }
+    })
+    .catch(function () { $("pwd").focus(); });
+})();
+</script>
+</body>
+</html>

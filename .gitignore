@@ -1,0 +1,7 @@
+# 离线交付包（bash package.sh 可随时重新生成；发布时作为 Release 附件上传）
+webssh-*.tar.gz
+# Python 运行残留
+__pycache__/
+*.pyc
+# 部署现场配置（含访问口令，勿入库）
+ssh.conf

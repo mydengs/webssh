@@ -1,0 +1,19 @@
+# WebSSH 配置 —— 全部可选，不写就自动探测
+# 修改本文件后**不需要重启服务**，下一次连接自动生效。
+# 位置：/srv/webssh/ssh.conf
+
+# ---------- 访问 WebSSH 的口令（浏览器登录用） ----------
+# ACCESS_PASSWORD=换成你自己的强口令
+
+# ---------- 连本机 sshd 用的参数（留空=自动探测） ----------
+# SSH_HOST=127.0.0.1
+# SSH_PORT=48332
+# SSH_USER=root
+# SSH_KEY=/root/.ssh/your_key
+
+# 只有当端口已经禁止口令登录、又只想用密码时才需要填
+# SSH_PASSWORD=你的root密码
+
+# ---------- WebSSH 服务自身监听 ----------
+# WEBSSH_BIND=0.0.0.0
+# WEBSSH_PORT=39622
